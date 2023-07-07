@@ -1,0 +1,15 @@
+LButton | Left mouse button
+RButton | Right mouse button
+MButton	| Middle or wheel mouse button	
+XButton1| 4th mouse button. Typically performs the same function as Browser_Back.
+XButton2| 5th mouse button. Typically performs the same function as Browser_Forward.
+WheelDown| Turn the wheel downward (toward you).
+WheelUp | Turn the wheel upward (away from you).
+CapsLock| Caps lock
+Space   | Space bar
+Tab     | Tab key
+Enter (or Return) | Enter key
+Escape (or Esc)	| Esc key
+Backspace (or BS) | Backspace
+Shift | Shift Key
+Space | Space Bar

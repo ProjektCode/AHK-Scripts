@@ -1,0 +1,11 @@
+Wanna set a script's INTIAL KEY to another?
+
+*FIND THE DESIRED SCRIPT*
+
+Right Click on script and find Edit Script.
+Look at the very top for something [EX]: - 3:: OR ~*Z::
+Replace existing key (3::) with (?::) desired key.
+SAVE.
+Double click script again (to refresh it)
+
+Any questions or problems? Shoot me a message: yourboiviper@hotmail.com
