@@ -13,3 +13,14 @@ Escape (or Esc)	| Esc key
 Backspace (or BS) | Backspace
 Shift | Shift Key
 Space | Space Bar
++ = Shift(either left or right)
+^ = Control
+! = Alt[Default]
+<^ = left control
+>^ = Right control
+<+ = Left shift
+>+ = Right shift
+<! = Left alt
+>! = Right alt
+<# = Left windows key
+># = Right windows key
