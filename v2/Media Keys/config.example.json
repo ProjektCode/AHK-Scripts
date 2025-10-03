@@ -1,0 +1,8 @@
+{
+  "client_id": "YOUR_CLIENT_ID_HERE",
+  "client_secret": "YOUR_CLIENT_SECRET_HERE",
+  "refresh_token": "YOUR_REFRESH_TOKEN_HERE",
+  "access_token": "YOUR_ACCESS_TOKEN",
+  "expires_at": 0,
+  "poll_interval_ms": 5000
+}

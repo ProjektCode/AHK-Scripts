@@ -1,0 +1,49 @@
+# =====================
+# AutoHotkey Project Gitignore
+# =====================
+
+# --- Config / Secrets ---
+config.json
+*.secret.json
+
+# --- Build Artifacts ---
+*.exe
+*.dll
+*.obj
+*.pdb
+*.log
+*.bak
+*.tmp
+
+# --- AutoHotkey-specific ---
+*.ahk~
+*.ahk.bak
+*.ahk.old
+
+# --- Logs / Debug dumps ---
+*.log
+*.dmp
+
+# --- OS-specific ---
+# Windows
+Thumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+
+# --- IDE / Editor ---
+# VSCode
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs (Rider, PhpStorm, etc.)
+.idea/
+
+# Other editors
+*.swp
+*.swo
+
+# --- Node/npm (if you use npm for helpers) ---
+node_modules/
+package-lock.json
