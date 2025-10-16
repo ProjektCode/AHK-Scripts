@@ -21,7 +21,7 @@ try {
     if (cfg.Has("poll_interval_ms"))
         pollInterval := cfg["poll_interval_ms"]
 } catch {
-    ; fallback
+    ; fallback if config missing/broken
 }
 
 ; ==============================
@@ -49,16 +49,17 @@ try {
     skipCooldown := A_TickCount + 2000
 }
 
-F1:: Toast(GetNowPlaying(), 4000)
+; Debug hotkeys
+F11:: Toast(GetNowPlaying(), 4000)
 
-F2:: {  ; force token refresh
+; Force refresh token
+F12:: {
     cfgPath := A_ScriptDir "\config.json"
     cfgJson := FileRead(cfgPath, "UTF-8")
     cfg := JsonLoad(&cfgJson)
 
     req := ComObject("WinHttp.WinHttpRequest.5.1")
     req.Open("POST", "https://accounts.spotify.com/api/token", false)
-
     auth := "Basic " . Base64Encode(cfg["client_id"] . ":" . cfg["client_secret"])
     req.SetRequestHeader("Authorization", auth)
     req.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded")
@@ -108,7 +109,7 @@ UpdatePlaybackState(force := false) {
         lastTrackId := track.id
         lastTrackChange := A_TickCount
         if (track.isPlaying)
-            ShowTrackToast(track, 2000)
+            ShowTrackToast(track, 4000)
     }
 
     ; Pause/resume detection
@@ -128,7 +129,6 @@ UpdatePlaybackState(force := false) {
 ; ==============================
 GetNowPlaying() {
     accessToken := GetAccessToken()
-
     req := ComObject("WinHttp.WinHttpRequest.5.1")
     req.Open("GET", "https://api.spotify.com/v1/me/player/currently-playing", false)
     req.SetRequestHeader("Authorization", "Bearer " accessToken)
@@ -160,7 +160,6 @@ GetAccessToken() {
 
     req := ComObject("WinHttp.WinHttpRequest.5.1")
     req.Open("POST", "https://accounts.spotify.com/api/token", false)
-
     auth := "Basic " . Base64Encode(cfg["client_id"] . ":" . cfg["client_secret"])
     req.SetRequestHeader("Authorization", auth)
     req.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded")
@@ -204,14 +203,16 @@ ExtractTrackInfo(data) {
     try {
         track := Map()
         track.id := data["item"]["id"]
-        track.title := data["item"]["name"]
-        track.artist := data["item"]["artists"][1]["name"]
-        track.coverUrl := data["item"]["album"]["images"][2]["url"]
+        track.title := TrimText(data["item"]["name"], 40)
+        track.artist := TrimText(data["item"]["artists"][1]["name"], 30)
         track.isPlaying := data["is_playing"]
 
-        ; 🔹 Auto-trim
-        track.title := TrimText(track.title, 40)
-        track.artist := TrimText(track.artist, 30)
+        ; Cover image (64x64 fallback)
+        images := data["item"]["album"]["images"]
+        track.coverUrl := (images.Length >= 3) ? images[3]["url"]
+            : (images.Length >= 2) ? images[2]["url"]
+                : (images.Length >= 1) ? images[1]["url"]
+                    : ""
 
         return track
     } catch {
@@ -229,9 +230,7 @@ ShowTrackToast(track, ms := 4000) {
 ; 🔹 Utilities
 ; ==============================
 TrimText(str, maxLen := 30) {
-    if (StrLen(str) > maxLen)
-        return SubStr(str, 1, maxLen - 1) "…"
-    return str
+    return (StrLen(str) > maxLen) ? SubStr(str, 1, maxLen - 1) "…" : str
 }
 
 Base64Encode(str) {
@@ -240,19 +239,13 @@ Base64Encode(str) {
     StrPut(str, buf, "UTF-8")
 
     DllCall("Crypt32.dll\CryptBinaryToStringW"
-        , "Ptr", buf
-        , "UInt", bytes
-        , "UInt", 0x1
-        , "Ptr", 0
-        , "UIntP", &outLen := 0)
+        , "Ptr", buf, "UInt", bytes, "UInt", 0x1
+        , "Ptr", 0, "UIntP", &outLen := 0)
 
     out := Buffer(outLen * 2)
     DllCall("Crypt32.dll\CryptBinaryToStringW"
-        , "Ptr", buf
-        , "UInt", bytes
-        , "UInt", 0x1
-        , "Ptr", out
-        , "UIntP", outLen)
+        , "Ptr", buf, "UInt", bytes, "UInt", 0x1
+        , "Ptr", out, "UIntP", outLen)
 
     return StrReplace(StrGet(out), "`r`n")
 }
@@ -271,6 +264,19 @@ UrlDownloadToFile(URL, Filename) {
     stream.Write(body)
     stream.SaveToFile(Filename, 2)
     stream.Close()
+}
+
+CryptStringToBinary(b64) {
+    DllCall("Crypt32.dll\CryptStringToBinaryW"
+        , "Str", b64, "UInt", 0, "UInt", 1
+        , "Ptr", 0, "UIntP", &size := 0
+        , "Ptr", 0, "Ptr", 0)
+    buf := Buffer(size)
+    DllCall("Crypt32.dll\CryptStringToBinaryW"
+        , "Str", b64, "UInt", 0, "UInt", 1
+        , "Ptr", buf, "UIntP", &size
+        , "Ptr", 0, "Ptr", 0)
+    return buf
 }
 
 ; ==============================
@@ -300,19 +306,37 @@ Toast(msg, ms := 3000) {
 }
 
 ; ==============================
-; 🔹 Toast with Album Art + Track Info
+; 🔹 Toast with Album Art + Track Info (no animation)
 ; ==============================
 ToastTrack(title, artist, coverUrl := "", ms := 4000) {
     global gToast
     try gToast.Destroy()
 
+    tmpFile := A_Temp "\cover.jpg"
     hasCover := false
     if (coverUrl != "") {
         try {
-            tmpFile := A_Temp "\cover.jpg"
             UrlDownloadToFile(coverUrl, tmpFile)
             hasCover := true
         }
+    }
+
+    ; Fallback placeholder (writes once)
+    if !hasCover {
+        placeholder := A_Temp "\placeholder.png"
+        if !FileExist(placeholder) {
+            placeholderB64 :=
+                (
+                    "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAm0lEQVR4nO3UsQkCMRAF0af7" .
+                    "3zHZCIQkF1dIoh8wZKn6gCj0KwvBNz7ku8YYN+vC8AQAAAAAAAAAAAAAAAADgFQFNgTsjaY9r" .
+                    "x1wbmD3P07gho7WZBrvEKQnVzthYia0ct1XQgWUb5pPMFJX9T9FJq8vA/Z6cfXyz8lm9E9LQ9" .
+                    "i+VYQkDchuh5f2XAKIfu9MLj4u8qecLQDwAAAAAAAAAAAAAAAAAAgNcAx0L29SkRuHwAAAAA" .
+                    "SUVORK5CYII="
+                )
+            Bin := CryptStringToBinary(placeholderB64)
+            f := FileOpen(placeholder, "w"), f.RawWrite(Bin, Bin.Size), f.Close()
+        }
+        tmpFile := placeholder
     }
 
     primary := MonitorGetPrimary()
@@ -321,19 +345,11 @@ ToastTrack(title, artist, coverUrl := "", ms := 4000) {
     gToast := Gui("+AlwaysOnTop -Caption +ToolWindow -DPIScale")
     gToast.BackColor := "0x202020"
 
-    if (hasCover) {
-        ; 🔹 Always force 64x64 album art
-        gToast.AddPicture("x10 y10 w64 h64", tmpFile)
-        xOffset := 84
-    } else {
-        xOffset := 10
-    }
-
+    gToast.AddPicture("x10 y10 w64 h64", tmpFile)
     gToast.SetFont("s10 bold", "Segoe UI")
-    gToast.AddText("x" xOffset " y10 cWhite Left", title)
-
+    gToast.AddText("x84 y10 cWhite Left", title)
     gToast.SetFont("s9", "Segoe UI")
-    gToast.AddText("x" xOffset " y+5 cGray Left", artist)
+    gToast.AddText("x84 y+5 cGray Left", artist)
 
     gToast.Show("AutoSize Hide")
     gToast.GetPos(, , &w, &h)
@@ -344,4 +360,3 @@ ToastTrack(title, artist, coverUrl := "", ms := 4000) {
 
     SetTimer(() => (gToast && gToast.Destroy(), gToast := ""), -ms)
 }
-
