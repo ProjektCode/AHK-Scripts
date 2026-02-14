@@ -7,46 +7,208 @@
 ; ==============================
 global lastTrackId := ""
 global lastPlaying := false
+global lastTrackChange := 0
 global pollInterval := 5000
 global skipCooldown := 0
 global gToast := ""
+global gToastId := 0
+global gConfig := ""
+global gConfigLoaded := false
 
 ; ==============================
-; 🔹 Load Config
+; 🔹 Config Management
 ; ==============================
-cfgPath := A_ScriptDir "\config.json"
-try {
-    jsonText := FileRead(cfgPath, "UTF-8")
-    cfg := JsonLoad(&jsonText)
-    if (cfg.Has("poll_interval_ms"))
-        pollInterval := cfg["poll_interval_ms"]
-} catch {
-    ; fallback if config missing/broken
+GetConfig(forceReload := false) {
+    global gConfig, gConfigLoaded
+    if (!forceReload && gConfigLoaded)
+        return gConfig
+    
+    cfgPath := A_ScriptDir "\config.json"
+    try {
+        jsonText := FileRead(cfgPath, "UTF-8")
+        gConfig := JsonLoad(&jsonText)
+        gConfigLoaded := true
+    } catch {
+        gConfig := Map()
+        gConfig["access_token"] := ""
+        gConfig["expires_at"] := ""
+    }
+    return gConfig
 }
+
+SaveConfig() {
+    global gConfig
+    cfgPath := A_ScriptDir "\config.json"
+    try {
+        FileDelete cfgPath
+    }
+    FileAppend JsonDump(gConfig, "  "), cfgPath, "UTF-8"
+}
+
+; ==============================
+; 🔹 Token Refresh (shared function)
+; ==============================
+RefreshAccessToken(showToast := true) {
+    global gConfig
+    cfg := GetConfig()
+    
+    try {
+        req := ComObject("WinHttp.WinHttpRequest.5.1")
+        req.Open("POST", "https://accounts.spotify.com/api/token", false)
+        auth := "Basic " . Base64Encode(cfg["client_id"] . ":" . cfg["client_secret"])
+        req.SetRequestHeader("Authorization", auth)
+        req.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded")
+        req.Send("grant_type=refresh_token&refresh_token=" . cfg["refresh_token"])
+    } catch as e {
+        if showToast
+            Toast("Network error: " . e.Message, 3000)
+        return ""
+    }
+
+    if (req.Status != 200) {
+        if showToast
+            MsgBox "Error refreshing token: " req.Status "`n" req.ResponseText
+        return ""
+    }
+
+    jsonText := req.ResponseText
+    data := JsonLoad(&jsonText)
+    newToken := data["access_token"]
+    expiresIn := data["expires_in"]
+    
+    ; Use A_NowUTC for reliable expiration (survives restart)
+    gConfig["access_token"] := newToken
+    gConfig["expires_at"] := DateAdd(A_NowUTC, expiresIn - 60, "Seconds")
+    SaveConfig()
+    
+    if showToast
+        Toast("Token refreshed", 2000)
+    return newToken
+}
+
+; ==============================
+; 🔹 Load Config on Startup
+; ==============================
+cfg := GetConfig()
+if (cfg.Has("poll_interval_ms"))
+    pollInterval := cfg["poll_interval_ms"]
+
+; ==============================
+; 🔹 System Tray Menu
+; ==============================
+SetupTrayMenu() {
+    A_TrayMenu.Delete()  ; Clear default menu
+    A_TrayMenu.Add("Show Current Track", TrayShowTrack)
+    A_TrayMenu.Add()  ; Separator
+    A_TrayMenu.Add("Play/Pause", TrayPlayPause)
+    A_TrayMenu.Add("Next Track", TrayNext)
+    A_TrayMenu.Add("Previous Track", TrayPrev)
+    A_TrayMenu.Add()  ; Separator
+    A_TrayMenu.Add("Refresh Token", TrayRefreshToken)
+    A_TrayMenu.Add()  ; Separator
+    A_TrayMenu.Add("Reload Script", TrayReload)
+    A_TrayMenu.Add("Exit", TrayExit)
+    A_TrayMenu.Default := "Show Current Track"
+    A_IconTip := "Spotify Media Controller"
+}
+
+TrayShowTrack(*) {
+    Toast(GetNowPlaying(), 4000)
+}
+
+TrayPlayPause(*) {
+    global skipCooldown
+    Send "{Media_Play_Pause}"
+    Toast("Play/Pause", 500)
+    skipCooldown := A_TickCount + 2000
+}
+
+TrayNext(*) {
+    global skipCooldown
+    Send "{Media_Next}"
+    Toast("Next", 500)
+    skipCooldown := A_TickCount + 2000
+    Sleep(1000)
+    UpdatePlaybackState(true)
+}
+
+TrayPrev(*) {
+    global skipCooldown
+    Send "{Media_Prev}"
+    Toast("Previous", 500)
+    skipCooldown := A_TickCount + 2000
+    Sleep(1000)
+    UpdatePlaybackState(true)
+}
+
+TrayRefreshToken(*) {
+    result := RefreshAccessToken(true)
+    if (result != "")
+        Toast("Token refreshed", 3000)
+}
+
+TrayReload(*) {
+    Reload()
+}
+
+TrayExit(*) {
+    ExitApp()
+}
+
+; Update tray tooltip with current track periodically
+UpdateTrayTip() {
+    try {
+        tip := GetNowPlaying()
+        A_IconTip := "Spotify: " . tip
+    } catch {
+        A_IconTip := "Spotify Media Controller"
+    }
+}
+
+SetupTrayMenu()
+SetTimer(UpdateTrayTip, 15000)  ; Update every 15 seconds
 
 ; ==============================
 ; 🔹 Hotkeys
 ; ==============================
 ^+Right:: {
+    global skipCooldown
     Send "{Media_Next}"
-    Toast("Next ▶", 500)
+    Toast("Next", 500)
     skipCooldown := A_TickCount + 2000
     Sleep(1000)
     UpdatePlaybackState(true)
 }
 
 ^+Left:: {
+    global skipCooldown
     Send "{Media_Prev}"
-    Toast("Previous ◀", 500)
+    Toast("Previous", 500)
     skipCooldown := A_TickCount + 2000
     Sleep(1000)
     UpdatePlaybackState(true)
 }
 
 ^+Down:: {
+    Send "{Volume_Down}"
+    Toast("Volume Down", 500)
+}
+
+^+Up:: {
+    Send "{Volume_Up}"
+    Toast("Volume Up", 500)
+}
+
+^+Space:: {
+    global skipCooldown
     Send "{Media_Play_Pause}"
-    Toast("Play/Pause ⏯", 500)
+    Toast("Play/Pause", 500)
     skipCooldown := A_TickCount + 2000
+}
+
+^+M:: {
+    Send "{Volume_Mute}"
+    Toast("Mute Toggle", 500)
 }
 
 ; Debug hotkeys
@@ -54,35 +216,9 @@ F11:: Toast(GetNowPlaying(), 4000)
 
 ; Force refresh token
 F12:: {
-    cfgPath := A_ScriptDir "\config.json"
-    cfgJson := FileRead(cfgPath, "UTF-8")
-    cfg := JsonLoad(&cfgJson)
-
-    req := ComObject("WinHttp.WinHttpRequest.5.1")
-    req.Open("POST", "https://accounts.spotify.com/api/token", false)
-    auth := "Basic " . Base64Encode(cfg["client_id"] . ":" . cfg["client_secret"])
-    req.SetRequestHeader("Authorization", auth)
-    req.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded")
-    req.Send("grant_type=refresh_token&refresh_token=" . cfg["refresh_token"])
-
-    if (req.Status != 200) {
-        MsgBox "Error forcing token refresh: " req.Status "`n" req.ResponseText
-        return
-    }
-
-    jsonText := req.ResponseText
-    data := JsonLoad(&jsonText)
-
-    newToken := data["access_token"]
-    expiresIn := data["expires_in"] * 1000
-
-    cfg["access_token"] := newToken
-    cfg["expires_at"] := A_TickCount + expiresIn - 60000
-
-    FileDelete cfgPath
-    FileAppend JsonDump(cfg, "  "), cfgPath, "UTF-8"
-
-    Toast("Access token refreshed ✅", 3000)
+    result := RefreshAccessToken(true)
+    if (result != "")
+        Toast("Access token refreshed", 3000)
 }
 
 ; ==============================
@@ -129,10 +265,17 @@ UpdatePlaybackState(force := false) {
 ; ==============================
 GetNowPlaying() {
     accessToken := GetAccessToken()
-    req := ComObject("WinHttp.WinHttpRequest.5.1")
-    req.Open("GET", "https://api.spotify.com/v1/me/player/currently-playing", false)
-    req.SetRequestHeader("Authorization", "Bearer " accessToken)
-    req.Send()
+    if (accessToken = "")
+        return "No token"
+    
+    try {
+        req := ComObject("WinHttp.WinHttpRequest.5.1")
+        req.Open("GET", "https://api.spotify.com/v1/me/player/currently-playing", false)
+        req.SetRequestHeader("Authorization", "Bearer " accessToken)
+        req.Send()
+    } catch as e {
+        return "Network error"
+    }
 
     if (req.Status = 204)
         return "Nothing playing"
@@ -151,50 +294,34 @@ GetNowPlaying() {
 }
 
 GetAccessToken() {
-    cfgPath := A_ScriptDir "\config.json"
-    jsonText := FileRead(cfgPath, "UTF-8")
-    cfg := JsonLoad(&jsonText)
-
-    if (cfg["access_token"] != "" && A_TickCount < cfg["expires_at"])
+    cfg := GetConfig()
+    
+    ; Check if token is still valid (using A_NowUTC for reliability)
+    if (cfg["access_token"] != "" && cfg["expires_at"] != "" && A_NowUTC < cfg["expires_at"])
         return cfg["access_token"]
-
-    req := ComObject("WinHttp.WinHttpRequest.5.1")
-    req.Open("POST", "https://accounts.spotify.com/api/token", false)
-    auth := "Basic " . Base64Encode(cfg["client_id"] . ":" . cfg["client_secret"])
-    req.SetRequestHeader("Authorization", auth)
-    req.SetRequestHeader("Content-Type", "application/x-www-form-urlencoded")
-    req.Send("grant_type=refresh_token&refresh_token=" . cfg["refresh_token"])
-
-    if (req.Status != 200) {
-        MsgBox "Error refreshing token: " req.Status "`n" req.ResponseText
-        return ""
-    }
-
-    respText := req.ResponseText
-    data := JsonLoad(&respText)
-    newToken := data["access_token"]
-    expiresIn := data["expires_in"] * 1000
-
-    cfg["access_token"] := newToken
-    cfg["expires_at"] := A_TickCount + expiresIn - 60000
-
-    FileDelete cfgPath
-    FileAppend JsonDump(cfg, "  "), cfgPath, "UTF-8"
-
-    Toast("🔄 Token refreshed", 2000)
-    return newToken
+    
+    ; Token expired or missing, refresh it
+    return RefreshAccessToken(false)
 }
 
 GetCurrentTrack() {
     accessToken := GetAccessToken()
     if (accessToken = "")
         return ""
-    req := ComObject("WinHttp.WinHttpRequest.5.1")
-    req.Open("GET", "https://api.spotify.com/v1/me/player/currently-playing", false)
-    req.SetRequestHeader("Authorization", "Bearer " accessToken)
-    req.Send()
-    if (req.Status != 200)
+    
+    try {
+        req := ComObject("WinHttp.WinHttpRequest.5.1")
+        req.Open("GET", "https://api.spotify.com/v1/me/player/currently-playing", false)
+        req.SetRequestHeader("Authorization", "Bearer " accessToken)
+        req.Send()
+    } catch {
         return ""
+    }
+    
+    ; HTTP 204 = no content (nothing playing) - valid response
+    if (req.Status = 204 || req.Status != 200)
+        return ""
+    
     jsonText := req.ResponseText
     return JsonLoad(&jsonText)
 }
@@ -286,8 +413,10 @@ Toast(msg, ms := 3000) {
     if !msg
         msg := "No data"
 
-    global gToast
+    global gToast, gToastId
     try gToast.Destroy()
+    
+    thisId := ++gToastId
 
     primary := MonitorGetPrimary()
     MonitorGetWorkArea(primary, &L, &T, &R, &B)
@@ -302,15 +431,18 @@ Toast(msg, ms := 3000) {
     x := R - w - 20, y := B - h - 20
     gToast.Show("x" x " y" y " NA")
 
-    SetTimer(() => (gToast && gToast.Destroy(), gToast := ""), -ms)
+    ; Only destroy if this is still the current toast (prevents race condition)
+    SetTimer(() => (gToastId = thisId && gToast && gToast.Destroy(), gToastId = thisId ? 0 : gToastId), -ms)
 }
 
 ; ==============================
 ; 🔹 Toast with Album Art + Track Info (no animation)
 ; ==============================
 ToastTrack(title, artist, coverUrl := "", ms := 4000) {
-    global gToast
+    global gToast, gToastId
     try gToast.Destroy()
+    
+    thisId := ++gToastId
 
     tmpFile := A_Temp "\cover.jpg"
     hasCover := false
@@ -358,5 +490,6 @@ ToastTrack(title, artist, coverUrl := "", ms := 4000) {
 
     WinSetRegion("0-0 w" w " h" h " R15-15", gToast.Hwnd)
 
-    SetTimer(() => (gToast && gToast.Destroy(), gToast := ""), -ms)
+    ; Only destroy if this is still the current toast (prevents race condition)
+    SetTimer(() => (gToastId = thisId && gToast && gToast.Destroy(), gToastId = thisId ? 0 : gToastId), -ms)
 }
